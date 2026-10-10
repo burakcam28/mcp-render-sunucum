@@ -1,0 +1,15 @@
+{
+  "name": "gemini-mcp",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "type": "module",
+  "scripts": {
+    "start": "node index.js"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.32.1",
+    "cors": "^2.8.6",
+    "express": "^4.22.3"
+  }
+}

@@ -11,7 +11,6 @@ app.set('trust proxy', 1);
 app.use(cors({ origin: true, credentials: true }));
 app.use(express.json());
 
-// Gelen her seyi gormek icin rontgen
 app.use((req, res, next) => {
   console.log(`[ISTEK] ${req.method} ${req.originalUrl}`);
   next();
@@ -20,15 +19,12 @@ app.use((req, res, next) => {
 const aktifBaglantilar = new Map();
 const generateSessionId = () => Math.random().toString(36).substring(2, 15);
 
-// Ana sayfaya ping gelirse 200 dondur (Gemini bazen ana dizini kontrol eder)
 app.get('/', (req, res) => res.send('MCP Sunucusu Aktif'));
 
-// Asil baglanti kapimiz
 app.get('/sse', async (req, res) => {
   const sessionId = generateSessionId();
   console.log(`[${sessionId}] SSE Baslatiliyor...`);
   
-  // Render'in bekletmesini kapatiyoruz
   res.setHeader('X-Accel-Buffering', 'no');
 
   const izoleSunucu = new Server({
@@ -36,7 +32,6 @@ app.get('/sse', async (req, res) => {
     version: "1.0.0"
   }, { capabilities: { tools: {} } });
 
-  // Gemini bos sunucu reddetmesin diye test araci
   izoleSunucu.setRequestHandler(ListToolsRequestSchema, async () => {
     return {
       tools: [{
@@ -54,14 +49,15 @@ app.get('/sse', async (req, res) => {
     throw new Error("Bilinmeyen arac");
   });
 
-  // ÇÖZÜM BURASI: https:// falan yok, sadece temiz görece yol veriyoruz!
-  const mesajLinkimiz = `/messages/${sessionId}`;
-  
+  // ÇÖZÜM: Portları aradan çıkaran temiz hostname ile TAM https:// adresi veriyoruz!
+  const temizHost = req.hostname;
+  const mesajLinkimiz = `https://${temizHost}/messages/${sessionId}`;
+  console.log(`[${sessionId}] Gemini'ye verilen TAM link: ${mesajLinkimiz}`);
+
   const transport = new SSEServerTransport(mesajLinkimiz, res);
   aktifBaglantilar.set(sessionId, { sunucu: izoleSunucu, transport: transport });
 
   await izoleSunucu.connect(transport);
-  console.log(`[${sessionId}] Endpoint verildi: ${mesajLinkimiz} (Mesaj bekleniyor)`);
   
   res.on('close', () => {
      aktifBaglantilar.delete(sessionId);
@@ -69,7 +65,6 @@ app.get('/sse', async (req, res) => {
   });
 });
 
-// Mesaj alma ucumuz
 app.post('/messages/:sessionId', async (req, res) => {
   const sessionId = req.params.sessionId;
   if (!aktifBaglantilar.has(sessionId)) {

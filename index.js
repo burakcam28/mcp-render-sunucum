@@ -11,20 +11,32 @@ app.set('trust proxy', 1);
 app.use(cors({ origin: true, credentials: true }));
 app.use(express.json());
 
+// Gelen her seyi gormek icin rontgen
+app.use((req, res, next) => {
+  console.log(`[ISTEK] ${req.method} ${req.originalUrl}`);
+  next();
+});
+
 const aktifBaglantilar = new Map();
 const generateSessionId = () => Math.random().toString(36).substring(2, 15);
 
-// 1. ASIL CANLI YAYIN KAPISI (/sse)
+// Ana sayfaya ping gelirse 200 dondur (Gemini bazen ana dizini kontrol eder)
+app.get('/', (req, res) => res.send('MCP Sunucusu Aktif'));
+
+// Asil baglanti kapimiz
 app.get('/sse', async (req, res) => {
   const sessionId = generateSessionId();
-  console.log(`[${sessionId}] Gemini Canli Yayina (SSE) baglaniyor...`);
+  console.log(`[${sessionId}] SSE Baslatiliyor...`);
   
+  // Render'in bekletmesini kapatiyoruz
+  res.setHeader('X-Accel-Buffering', 'no');
+
   const izoleSunucu = new Server({
-    name: `gemini-sunucum-${sessionId}`,
+    name: `gemini-mcp-${sessionId}`,
     version: "1.0.0"
   }, { capabilities: { tools: {} } });
 
-  // Gemini bos sunucu gorup reddetmesin diye zorunlu test araci
+  // Gemini bos sunucu reddetmesin diye test araci
   izoleSunucu.setRequestHandler(ListToolsRequestSchema, async () => {
     return {
       tools: [{
@@ -37,47 +49,38 @@ app.get('/sse', async (req, res) => {
 
   izoleSunucu.setRequestHandler(CallToolRequestSchema, async (request) => {
     if (request.params.name === "sunucu_testi") {
-      return { content: [{ type: "text", text: "Sunucu mukemmel calisiyor kanka!" }] };
+      return { content: [{ type: "text", text: "Mukemmel calisiyor!" }] };
     }
     throw new Error("Bilinmeyen arac");
   });
 
-  // Render'in bekletmesini önle ve SSE kimligini bas
-  res.setHeader('X-Accel-Buffering', 'no');
-
-  // Mesaj yolu icin temiz, soru isaretsiz tam link
-  const mesajLinkimiz = `https://${req.hostname}/messages/${sessionId}`;
+  // ÇÖZÜM BURASI: https:// falan yok, sadece temiz görece yol veriyoruz!
+  const mesajLinkimiz = `/messages/${sessionId}`;
   
   const transport = new SSEServerTransport(mesajLinkimiz, res);
   aktifBaglantilar.set(sessionId, { sunucu: izoleSunucu, transport: transport });
 
   await izoleSunucu.connect(transport);
-  console.log(`[${sessionId}] Baglanti kuruldu, mesaj bekleniyor...`);
+  console.log(`[${sessionId}] Endpoint verildi: ${mesajLinkimiz} (Mesaj bekleniyor)`);
   
   res.on('close', () => {
      aktifBaglantilar.delete(sessionId);
-     console.log(`[${sessionId}] Baglanti sonlandi.`);
+     console.log(`[${sessionId}] Baglanti kapandi.`);
   });
 });
 
-// 2. MESAJ ALMA KAPISI (/messages)
+// Mesaj alma ucumuz
 app.post('/messages/:sessionId', async (req, res) => {
   const sessionId = req.params.sessionId;
   if (!aktifBaglantilar.has(sessionId)) {
     return res.status(404).send("Oturum bulunamadi.");
   }
+  
+  console.log(`[${sessionId}] KOMUT ALINDI!`);
   const { transport } = aktifBaglantilar.get(sessionId);
   await transport.handlePostMessage(req, res);
 });
 
-// Eger Gemini inatla eski /mcp linkine gelirse onu uyaralim
-app.use((req, res) => {
-  if (req.path === '/mcp') {
-     console.log("UYARI: Gemini eski /mcp linkini deniyor!");
-  }
-  res.status(404).send("Lutfen sonu /sse olan linki kullanin.");
-});
-
 app.listen(PORT, () => {
-  console.log(`🚀 MCP Sunucusu Port ${PORT} uzerinde hazir!`);
+  console.log(`🚀 MCP Sunucusu Port ${PORT} uzerinde yayinda!`);
 });

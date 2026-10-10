@@ -22,9 +22,10 @@ let transport;
 app.get('/mcp', async (req, res) => {
   console.log("Yeni bir MCP baglantisi geldi!");
   
-  // ÇÖZÜM BURADA: Linki tam yol (https://...) olarak tanımlıyoruz
-  const mesajLinkimiz = `https://${req.headers.host}/mcp/messages`;
+  // ÇÖZÜM: Render sunucusunun anlık mesajları bekletmesini engelliyoruz
+  res.setHeader('X-Accel-Buffering', 'no');
   
+  const mesajLinkimiz = `https://${req.headers.host}/mcp/messages`;
   transport = new SSEServerTransport(mesajLinkimiz, res);
   await mcpServer.connect(transport);
 });

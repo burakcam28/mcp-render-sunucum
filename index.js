@@ -7,22 +7,27 @@ import { ListToolsRequestSchema, CallToolRequestSchema } from "@modelcontextprot
 const app = express();
 const PORT = process.env.PORT || 3000; 
 
-app.use(cors());
+// Render'in arka plandaki proxy ayarlarina uyum sagla
+app.set('trust proxy', 1);
+
+// Her turlu CORS engelini ve Gemini'nin gizli (OPTIONS) pinglerini onayla
+app.use(cors({ origin: true, credentials: true }));
+app.options('*', cors()); 
 app.use(express.json());
 
-// Her Gemini bağlantısı için o bağlantıya özel, izole bir sunucu ve transport tutacağımız bir "depo"
-const aktifBaglantilar = new Map();
+// RÖNTGEN: Sunucuya kapidan giren her seyi loglar
+app.use((req, res, next) => {
+  console.log(`[GELEN ISTEK] ${req.method} ${req.originalUrl}`);
+  next();
+});
 
-// Benzersiz bir ID üretici (Basit bir çözüm)
+const aktifBaglantilar = new Map();
 const generateSessionId = () => Math.random().toString(36).substring(2, 15);
 
 app.get('/mcp', async (req, res) => {
-  console.log("-> /mcp : Gemini'den Yeni Bir Baglanti Istegi Geldi!");
-  
   const sessionId = generateSessionId();
-  console.log(`-> Session olusturuldu: ${sessionId}`);
-
-  // Her bağlantı için TAMAMEN YENİ bir sunucu objesi yaratıyoruz (Çökme hatasını bitiren hamle)
+  console.log(`[${sessionId}] SSE Baglantisi Hazirlaniyor...`);
+  
   const izoleSunucu = new Server({
     name: `gemini-mcp-${sessionId}`,
     version: "1.0.0"
@@ -30,12 +35,12 @@ app.get('/mcp', async (req, res) => {
     capabilities: { tools: {} }
   });
 
-  // Gemini'nin "bu sunucu boş" deyip kaçmaması için sahte test aracımız (tool)
+  // Gemini bos sunucu gorup kacmasin diye sahte arac
   izoleSunucu.setRequestHandler(ListToolsRequestSchema, async () => {
     return {
       tools: [{
         name: "sunucu_testi",
-        description: "Sunucunun Gemini ile baglantisini test eder",
+        description: "Sunucunun baglantisini test eder",
         inputSchema: { type: "object", properties: {} }
       }]
     };
@@ -43,45 +48,39 @@ app.get('/mcp', async (req, res) => {
 
   izoleSunucu.setRequestHandler(CallToolRequestSchema, async (request) => {
     if (request.params.name === "sunucu_testi") {
-      return { content: [{ type: "text", text: "Bağlantı %100 başarılı, sunucu çalışıyor!" }] };
+      return { content: [{ type: "text", text: "Sunucu mukemmel calisiyor!" }] };
     }
-    throw new Error("Bilinmeyen tool");
+    throw new Error("Bilinmeyen arac");
   });
 
-  // Sadece Render'ın bekletmesini kapatıyoruz
   res.setHeader('X-Accel-Buffering', 'no');
 
-  // Bu spesifik session (oturum) için mesaj adresini tanımlıyoruz
-  const mesajLinkimiz = `/mcp/messages?sessionId=${sessionId}`;
-  const transport = new SSEServerTransport(mesajLinkimiz, res);
+  // ÇÖZÜM: Portlari söküp atan, en temiz yalin domaini veren req.hostname kullaniyoruz!
+  const temizHost = req.hostname;
+  const mesajLinkimiz = `https://${temizHost}/mcp/messages/${sessionId}`;
+  console.log(`[${sessionId}] Gemini'ye verilen TEMIZ link: ${mesajLinkimiz}`);
 
-  // Sunucu ve transportu "depo"muza kaydediyoruz
+  const transport = new SSEServerTransport(mesajLinkimiz, res);
   aktifBaglantilar.set(sessionId, { sunucu: izoleSunucu, transport: transport });
 
-  // O bağlantıya özel sunucuyu başlatıyoruz
   await izoleSunucu.connect(transport);
-  console.log(`-> ${sessionId} baglantisi basariyla kuruldu!`);
-
-  // Eğer Gemini bir süre sonra bağlantıyı keserse, depodan temizliyoruz
+  console.log(`[${sessionId}] Baglanti Tamamlandi! Mesaj bekleniyor...`);
+  
   res.on('close', () => {
-     console.log(`-> Baglanti kapandi, temizleniyor: ${sessionId}`);
      aktifBaglantilar.delete(sessionId);
+     console.log(`[${sessionId}] ❌ Baglanti koptu veya sonlandirildi.`);
   });
 });
 
-app.post('/mcp/messages', async (req, res) => {
-  const sessionId = req.query.sessionId;
-  
-  if (!sessionId || !aktifBaglantilar.has(sessionId)) {
-    return res.status(400).send("Gecersiz veya kopmus baglanti.");
+app.post('/mcp/messages/:sessionId', async (req, res) => {
+  const sessionId = req.params.sessionId;
+  if (!aktifBaglantilar.has(sessionId)) {
+    return res.status(404).send("Oturum bulunamadi.");
   }
-
-  console.log(`-> /mcp/messages : ${sessionId} icin komut geldi!`);
   const { transport } = aktifBaglantilar.get(sessionId);
-  
   await transport.handlePostMessage(req, res);
 });
 
 app.listen(PORT, () => {
-  console.log(`🚀 MCP Sunucusu yayinda (Coklu Oturum Destekli)! Port: ${PORT}`);
+  console.log(`🚀 MCP Sunucusu Port ${PORT} uzerinde hazir!`);
 });

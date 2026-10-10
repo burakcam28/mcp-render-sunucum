@@ -7,15 +7,12 @@ import { ListToolsRequestSchema, CallToolRequestSchema } from "@modelcontextprot
 const app = express();
 const PORT = process.env.PORT || 3000; 
 
-// Render'in arka plandaki proxy ayarlarina uyum sagla
 app.set('trust proxy', 1);
-
-// Her turlu CORS engelini ve Gemini'nin gizli (OPTIONS) pinglerini onayla
 app.use(cors({ origin: true, credentials: true }));
 app.options('*', cors()); 
 app.use(express.json());
 
-// RÖNTGEN: Sunucuya kapidan giren her seyi loglar
+// RÖNTGEN
 app.use((req, res, next) => {
   console.log(`[GELEN ISTEK] ${req.method} ${req.originalUrl}`);
   next();
@@ -24,18 +21,22 @@ app.use((req, res, next) => {
 const aktifBaglantilar = new Map();
 const generateSessionId = () => Math.random().toString(36).substring(2, 15);
 
+// ÇÖZÜM İŞTE BURADA: Gemini Ping (HEAD) attığında anında onay verip gönderiyoruz!
+app.head('/mcp', (req, res) => {
+  console.log("-> [PING ONAYI] Gemini test pıngi atti, aninda onaylandi!");
+  res.status(200).end();
+});
+
+// Gerçek bağlantı (GET) geldiğinde yayın başlıyor
 app.get('/mcp', async (req, res) => {
   const sessionId = generateSessionId();
-  console.log(`[${sessionId}] SSE Baglantisi Hazirlaniyor...`);
+  console.log(`[${sessionId}] Asil SSE Baglantisi Hazirlaniyor...`);
   
   const izoleSunucu = new Server({
     name: `gemini-mcp-${sessionId}`,
     version: "1.0.0"
-  }, {
-    capabilities: { tools: {} }
-  });
+  }, { capabilities: { tools: {} } });
 
-  // Gemini bos sunucu gorup kacmasin diye sahte arac
   izoleSunucu.setRequestHandler(ListToolsRequestSchema, async () => {
     return {
       tools: [{
@@ -55,10 +56,8 @@ app.get('/mcp', async (req, res) => {
 
   res.setHeader('X-Accel-Buffering', 'no');
 
-  // ÇÖZÜM: Portlari söküp atan, en temiz yalin domaini veren req.hostname kullaniyoruz!
   const temizHost = req.hostname;
   const mesajLinkimiz = `https://${temizHost}/mcp/messages/${sessionId}`;
-  console.log(`[${sessionId}] Gemini'ye verilen TEMIZ link: ${mesajLinkimiz}`);
 
   const transport = new SSEServerTransport(mesajLinkimiz, res);
   aktifBaglantilar.set(sessionId, { sunucu: izoleSunucu, transport: transport });
@@ -68,7 +67,7 @@ app.get('/mcp', async (req, res) => {
   
   res.on('close', () => {
      aktifBaglantilar.delete(sessionId);
-     console.log(`[${sessionId}] ❌ Baglanti koptu veya sonlandirildi.`);
+     console.log(`[${sessionId}] ❌ Baglanti sonlandirildi.`);
   });
 });
 

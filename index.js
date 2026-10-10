@@ -12,7 +12,6 @@ app.use(cors({ origin: true, credentials: true }));
 app.options('*', cors()); 
 app.use(express.json());
 
-// RÖNTGEN
 app.use((req, res, next) => {
   console.log(`[GELEN ISTEK] ${req.method} ${req.originalUrl}`);
   next();
@@ -21,13 +20,16 @@ app.use((req, res, next) => {
 const aktifBaglantilar = new Map();
 const generateSessionId = () => Math.random().toString(36).substring(2, 15);
 
-// ÇÖZÜM İŞTE BURADA: Gemini Ping (HEAD) attığında anında onay verip gönderiyoruz!
+// ÇÖZÜM: HEAD isteğine "Ben bir Canlı Yayın (SSE) sunucusuyum" başlıklarını ekliyoruz
 app.head('/mcp', (req, res) => {
-  console.log("-> [PING ONAYI] Gemini test pıngi atti, aninda onaylandi!");
+  console.log("-> [PING ONAYI] Gemini HEAD atti. SSE kimligi gosteriliyor!");
+  res.setHeader('Content-Type', 'text/event-stream');
+  res.setHeader('Cache-Control', 'no-cache');
+  res.setHeader('Connection', 'keep-alive');
   res.status(200).end();
 });
 
-// Gerçek bağlantı (GET) geldiğinde yayın başlıyor
+// Asıl bağlantı (GET)
 app.get('/mcp', async (req, res) => {
   const sessionId = generateSessionId();
   console.log(`[${sessionId}] Asil SSE Baglantisi Hazirlaniyor...`);
@@ -55,6 +57,9 @@ app.get('/mcp', async (req, res) => {
   });
 
   res.setHeader('X-Accel-Buffering', 'no');
+  res.setHeader('Content-Type', 'text/event-stream');
+  res.setHeader('Cache-Control', 'no-cache');
+  res.setHeader('Connection', 'keep-alive');
 
   const temizHost = req.hostname;
   const mesajLinkimiz = `https://${temizHost}/mcp/messages/${sessionId}`;
@@ -71,6 +76,7 @@ app.get('/mcp', async (req, res) => {
   });
 });
 
+// Mesaj alma ucu (POST)
 app.post('/mcp/messages/:sessionId', async (req, res) => {
   const sessionId = req.params.sessionId;
   if (!aktifBaglantilar.has(sessionId)) {
@@ -78,6 +84,12 @@ app.post('/mcp/messages/:sessionId', async (req, res) => {
   }
   const { transport } = aktifBaglantilar.get(sessionId);
   await transport.handlePostMessage(req, res);
+});
+
+// Güvenlik ağı: Gemini inatla yanlış yere POST atarsa içeriğini görelim
+app.post('/mcp', (req, res) => {
+  console.log(`[HATA YAKALANDI] Gemini yanlis yere POST atti! Body:`, JSON.stringify(req.body));
+  res.status(404).send("Lutfen baglantiyi GET uzerinden kurun.");
 });
 
 app.listen(PORT, () => {

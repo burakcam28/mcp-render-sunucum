@@ -9,41 +9,27 @@ const PORT = process.env.PORT || 3000;
 
 app.set('trust proxy', 1);
 app.use(cors({ origin: true, credentials: true }));
-app.options('*', cors()); 
 app.use(express.json());
-
-app.use((req, res, next) => {
-  console.log(`[GELEN ISTEK] ${req.method} ${req.originalUrl}`);
-  next();
-});
 
 const aktifBaglantilar = new Map();
 const generateSessionId = () => Math.random().toString(36).substring(2, 15);
 
-// ÇÖZÜM: HEAD isteğine "Ben bir Canlı Yayın (SSE) sunucusuyum" başlıklarını ekliyoruz
-app.head('/mcp', (req, res) => {
-  console.log("-> [PING ONAYI] Gemini HEAD atti. SSE kimligi gosteriliyor!");
-  res.setHeader('Content-Type', 'text/event-stream');
-  res.setHeader('Cache-Control', 'no-cache');
-  res.setHeader('Connection', 'keep-alive');
-  res.status(200).end();
-});
-
-// Asıl bağlantı (GET)
-app.get('/mcp', async (req, res) => {
+// 1. ASIL CANLI YAYIN KAPISI (/sse)
+app.get('/sse', async (req, res) => {
   const sessionId = generateSessionId();
-  console.log(`[${sessionId}] Asil SSE Baglantisi Hazirlaniyor...`);
+  console.log(`[${sessionId}] Gemini Canli Yayina (SSE) baglaniyor...`);
   
   const izoleSunucu = new Server({
-    name: `gemini-mcp-${sessionId}`,
+    name: `gemini-sunucum-${sessionId}`,
     version: "1.0.0"
   }, { capabilities: { tools: {} } });
 
+  // Gemini bos sunucu gorup reddetmesin diye zorunlu test araci
   izoleSunucu.setRequestHandler(ListToolsRequestSchema, async () => {
     return {
       tools: [{
         name: "sunucu_testi",
-        description: "Sunucunun baglantisini test eder",
+        description: "Baglantiyi test eder",
         inputSchema: { type: "object", properties: {} }
       }]
     };
@@ -51,33 +37,31 @@ app.get('/mcp', async (req, res) => {
 
   izoleSunucu.setRequestHandler(CallToolRequestSchema, async (request) => {
     if (request.params.name === "sunucu_testi") {
-      return { content: [{ type: "text", text: "Sunucu mukemmel calisiyor!" }] };
+      return { content: [{ type: "text", text: "Sunucu mukemmel calisiyor kanka!" }] };
     }
     throw new Error("Bilinmeyen arac");
   });
 
+  // Render'in bekletmesini önle ve SSE kimligini bas
   res.setHeader('X-Accel-Buffering', 'no');
-  res.setHeader('Content-Type', 'text/event-stream');
-  res.setHeader('Cache-Control', 'no-cache');
-  res.setHeader('Connection', 'keep-alive');
 
-  const temizHost = req.hostname;
-  const mesajLinkimiz = `https://${temizHost}/mcp/messages/${sessionId}`;
-
+  // Mesaj yolu icin temiz, soru isaretsiz tam link
+  const mesajLinkimiz = `https://${req.hostname}/messages/${sessionId}`;
+  
   const transport = new SSEServerTransport(mesajLinkimiz, res);
   aktifBaglantilar.set(sessionId, { sunucu: izoleSunucu, transport: transport });
 
   await izoleSunucu.connect(transport);
-  console.log(`[${sessionId}] Baglanti Tamamlandi! Mesaj bekleniyor...`);
+  console.log(`[${sessionId}] Baglanti kuruldu, mesaj bekleniyor...`);
   
   res.on('close', () => {
      aktifBaglantilar.delete(sessionId);
-     console.log(`[${sessionId}] ❌ Baglanti sonlandirildi.`);
+     console.log(`[${sessionId}] Baglanti sonlandi.`);
   });
 });
 
-// Mesaj alma ucu (POST)
-app.post('/mcp/messages/:sessionId', async (req, res) => {
+// 2. MESAJ ALMA KAPISI (/messages)
+app.post('/messages/:sessionId', async (req, res) => {
   const sessionId = req.params.sessionId;
   if (!aktifBaglantilar.has(sessionId)) {
     return res.status(404).send("Oturum bulunamadi.");
@@ -86,10 +70,12 @@ app.post('/mcp/messages/:sessionId', async (req, res) => {
   await transport.handlePostMessage(req, res);
 });
 
-// Güvenlik ağı: Gemini inatla yanlış yere POST atarsa içeriğini görelim
-app.post('/mcp', (req, res) => {
-  console.log(`[HATA YAKALANDI] Gemini yanlis yere POST atti! Body:`, JSON.stringify(req.body));
-  res.status(404).send("Lutfen baglantiyi GET uzerinden kurun.");
+// Eger Gemini inatla eski /mcp linkine gelirse onu uyaralim
+app.use((req, res) => {
+  if (req.path === '/mcp') {
+     console.log("UYARI: Gemini eski /mcp linkini deniyor!");
+  }
+  res.status(404).send("Lutfen sonu /sse olan linki kullanin.");
 });
 
 app.listen(PORT, () => {

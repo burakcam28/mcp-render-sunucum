@@ -6,7 +6,12 @@ import { SSEServerTransport } from "@modelcontextprotocol/sdk/server/sse.js";
 const app = express();
 const PORT = process.env.PORT || 3000; 
 
-app.use(cors());
+// Gemini Spark'ın özel test (ping) bağlantılarına izin ver
+app.use(cors({
+  origin: '*', // Her yerden gelen isteği kabul et
+  methods: ['GET', 'POST', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization']
+}));
 
 const mcpServer = new Server({
   name: "gemini-mcp",
@@ -20,29 +25,39 @@ const mcpServer = new Server({
 let aktifTransport = null;
 
 app.get('/mcp', async (req, res) => {
-  console.log("-> Gemini'den bağlantı isteği geldi!");
+  console.log("-> /mcp: Gemini SSE Baglantisi baslatiliyor...");
   
-  // Render'ın bekletme yapmasını engelliyoruz
+  // Render'ın bağlantı koparmasını engelle
+  res.setHeader('Content-Type', 'text/event-stream');
+  res.setHeader('Cache-Control', 'no-cache');
+  res.setHeader('Connection', 'keep-alive');
   res.setHeader('X-Accel-Buffering', 'no');
   
-  // Eğer eski bir bağlantı açık kalmışsa onu kapatıp temizliyoruz (Sorunu çözen kısım bu)
+  // Önceki bağlantı varsa kapat (Çakışmayı önle)
   if (aktifTransport) {
     try { await aktifTransport.close(); } catch(e) {}
   }
   
-  // Karmaşık tam link yerine sadece kısa yolu veriyoruz
-  aktifTransport = new SSEServerTransport('/mcp/messages', res);
+  // Mesaj yolunu mutlak URL olarak ayarla (Gemini'nin HTTP URL sistemine uygun)
+  const messageUrl = `https://${req.headers.host}/mcp/messages`;
+  aktifTransport = new SSEServerTransport(messageUrl, res);
+  
   await mcpServer.connect(aktifTransport);
-  console.log("-> Bağlantı başarıyla sağlandı!");
+  console.log("-> /mcp: Baglanti KURULDU.");
+});
+
+// Gemini'nin OPTIONS testi (Preflight)
+app.options('/mcp/messages', (req, res) => {
+  res.sendStatus(200);
 });
 
 app.post('/mcp/messages', express.json(), async (req, res) => {
   if (!aktifTransport) {
-    return res.status(400).send("Aktif bir bağlantı yok.");
+    return res.status(400).send("Baglanti yok.");
   }
   await aktifTransport.handlePostMessage(req, res);
 });
 
 app.listen(PORT, () => {
-  console.log(`🚀 Sunucu kusursuz çalışıyor! Port: ${PORT}`);
+  console.log(`🚀 MCP Sunucusu calisiyor: Port ${PORT}`);
 });

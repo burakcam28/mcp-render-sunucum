@@ -6,7 +6,8 @@ import { SSEServerTransport } from "@modelcontextprotocol/sdk/server/sse.js";
 const app = express();
 const PORT = process.env.PORT || 3000; 
 
-app.use(cors());
+// Güvenlik duvarına takılmamak için CORS ayarını tam yetkili yapıyoruz
+app.use(cors({ origin: true, credentials: true }));
 
 const mcpServer = new Server({
   name: "gemini-mcp-render",
@@ -20,23 +21,29 @@ const mcpServer = new Server({
 let transport;
 
 app.get('/mcp', async (req, res) => {
-  console.log("Yeni bir MCP baglantisi geldi!");
+  console.log("-> /mcp: Gemini'den Canli (SSE) baglanti istegi geldi!");
   
-  // ÇÖZÜM: Render sunucusunun anlık mesajları bekletmesini engelliyoruz
+  // Render'ın bağlantıyı kesmesini önleyen 4 kritik zorunlu başlık
+  res.setHeader('Content-Type', 'text/event-stream');
+  res.setHeader('Cache-Control', 'no-cache');
+  res.setHeader('Connection', 'keep-alive');
   res.setHeader('X-Accel-Buffering', 'no');
   
   const mesajLinkimiz = `https://${req.headers.host}/mcp/messages`;
+  console.log("Mesaj adresi ayarlandi:", mesajLinkimiz);
+
   transport = new SSEServerTransport(mesajLinkimiz, res);
   await mcpServer.connect(transport);
 });
 
-app.post('/mcp/messages', express.json(), async (req, res) => {
+app.post('/mcp/messages', express.json({ limit: '50mb' }), async (req, res) => {
+  console.log("-> /mcp/messages: Gemini komut gonderdi!");
   if (!transport) {
-    return res.status(503).send("MCP baglantisi yok.");
+    return res.status(503).send("MCP baglantisi henuz hazir degil.");
   }
   await transport.handlePostMessage(req, res);
 });
 
 app.listen(PORT, () => {
-  console.log(`MCP Sunucusu ayakta! Port: ${PORT}`);
+  console.log(`🚀 MCP Sunucusu kusursuz calisiyor! Port: ${PORT}`);
 });
